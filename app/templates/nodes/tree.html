@@ -1,0 +1,316 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4"> {# Sử dụng container-fluid để giao diện rộng hơn #}
+    <div class="row">
+        {# Cột trái cho Tree View #}
+        <div class="col-md-5 col-lg-4">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h5 class="mb-0">Server: {{ server.name }}</h5>
+                <a href="{{ url_for('list_servers') }}" class="btn btn-sm btn-secondary">DS Server</a>
+            </div>
+            <div class="mb-2">
+                <button id="jstreeExpandAllBtn" class="btn btn-xs btn-outline-secondary me-1 py-0 px-1" title="Mở Tất Cả"><i class="fas fa-plus-square"></i> Mở</button>
+                <button id="jstreeCollapseAllBtn" class="btn btn-xs btn-outline-secondary py-0 px-1" title="Đóng Tất Cả"><i class="fas fa-minus-square"></i> Đóng</button>
+            </div>
+            
+            {% if nodes_count > 0 %}
+              {# Container cho ô tìm kiếm của jsTree #}
+              <div id="jstree_search_container" class="mb-2">
+                {# Ô tìm kiếm sẽ được JS chèn vào đây #}
+              </div>
+              <div id="jstree_container" class="mt-1" style="max-height: 70vh; overflow-y: auto; border: 1px solid #ddd; padding: 10px; background-color: #fdfdfd;">
+                {# jsTree sẽ được render ở đây #}
+              </div>
+            {% else %}
+              <div class="alert alert-info mt-3">
+                Không có node nào được lưu trong database cho server này.
+                Hãy thử <form action="{{ url_for('trigger_browse_and_save_nodes', server_id=server.id) }}" method="POST" style="display: inline;">
+                            {{ csrf_token() }}
+                            <input type="hidden" name="max_depth" value="3">
+                            <button type="submit" class="btn btn-link p-0 m-0 align-baseline">duyệt node</button>
+                        </form> cho server này.
+              </div>
+            {% endif %}
+            <small class="text-muted mt-1 d-block">Tổng số node trong DB: {{ nodes_count }}</small>
+        </div>
+
+        {# Cột phải cho Panel Chi tiết Node #}
+        <div class="col-md-7 col-lg-8">
+            {# Hàng cho tiêu đề "Chi tiết Node" và khu vực cho nút "Làm mới giá trị" #}
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="mb-0">Chi tiết Node</h5>
+                <div id="refresh_button_area">
+                    {# Nút "Làm mới giá trị" và trạng thái làm mới sẽ được JS chèn vào đây #}
+                </div>
+            </div>
+            <div id="node_details_panel" class="p-3 border bg-light" style="min-height: 70vh; max-height: 70vh; overflow-y: auto;">
+                <p class="text-muted">Chọn một node từ cây bên trái để xem chi tiết.</p>
+                {# Nội dung chi tiết node sẽ được load vào đây bằng JavaScript #}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block styles %}
+{{ super() }}
+{# Link CSS của jsTree và FontAwesome đã được thêm vào base.html #}
+<style>
+    /* --- jsTree Customizations --- */
+    #jstree_container .jstree-anchor { 
+        width: calc(100% - 30px) !important; /* Cho text dài hơn */
+        text-overflow: ellipsis;
+        overflow: hidden;
+        white-space: nowrap;
+        display: inline-block; 
+        line-height: 24px; /* Đảm bảo icon và text thẳng hàng */
+        height: 24px;
+    }
+    .jstree-default .jstree-node .jstree-anchor .jstree-icon {
+        margin-right: 5px; 
+        margin-left: 2px;
+    }
+    .jstree-default .jstree-ocl { /* Nút +/- của jsTree */
+        width: 24px;
+        height: 24px;
+        line-height: 24px;
+    }
+
+    /* --- Node Details Panel --- */
+    #node_details_panel table th:first-child,
+    #node_details_panel table td:first-child {
+        width: 35%; /* Độ rộng cột Thuộc tính */
+    }
+    #node_details_panel table td {
+        word-break: break-all; /* Chống tràn từ quá dài */
+        vertical-align: middle;
+    }
+    #node_details_panel table td pre { 
+        margin-bottom: 0;
+        font-size: 0.85em;
+        white-space: pre-wrap; 
+        word-break: break-all;
+        background-color: #f8f9fa; 
+        padding: 5px;
+        border-radius: 4px;
+    }
+    .small-text-muted { /* Class cho span #refreshStatus */
+        font-size: 0.8em;
+        color: #6c757d;
+    }
+</style>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+{# jQuery và jsTree JS đã được thêm vào base.html #}
+<script>
+$(function () {
+    const jstreeDataJson = {{ jstree_data_json|safe }};
+    const nodeDetailsPanel = $('#node_details_panel');
+    const refreshButtonArea = $('#refresh_button_area'); // Container cho nút refresh
+    let currentSelectedNodeDbIdForDetails = null; 
+    // let currentSelectedNodeOpcNodeId = null; // Có thể không cần nếu chỉ dùng db_id cho refresh
+
+    function escapeHtml(unsafe) {
+        if (unsafe === null || unsafe === undefined) return "";
+        return String(unsafe)
+             .replace(/&/g, "&amp;")
+             .replace(/</g, "&lt;")
+             .replace(/>/g, "&gt;")
+             .replace(/"/g, "&quot;")
+             .replace(/'/g, "&#39;");
+    }
+
+    function populateNodeDetailsPanel(response, nodeDbIdForButton) {
+        refreshButtonArea.empty(); // Xóa nút refresh cũ và trạng thái mỗi khi chọn node mới
+
+        if (response.error && !response.Value) { 
+            nodeDetailsPanel.html(`<div class="alert alert-danger">Lỗi: ${escapeHtml(response.error)}</div>`);
+            return;
+        }
+        
+        let tableHtml = '<table class="table table-sm table-bordered table-striped table-hover">';
+        tableHtml += '<thead class="table-dark"><tr><th>Thuộc tính</th><th>Giá trị</th></tr></thead>';
+        tableHtml += '<tbody>';
+        
+        const displayOrder = [
+            "DisplayName", "NodeId", "NodeClass", "BrowseName", "Description", 
+            "Value", "ValueStatusCode", "ValueSourceTimestamp", "ValueServerTimestamp",
+            "DataTypeName", "DataType", "AccessLevel", "UserAccessLevel", 
+            "ValueRank", "ArrayDimensions", "Historizing", "MinimumSamplingInterval", 
+            "Executable", "UserExecutable", "IsAbstract", "Symmetric",
+            "InverseName", "ContainsNoLoops", "EventNotifier", "WriteMask", "UserWriteMask"
+        ];
+        const displayedKeys = new Set();
+
+        function renderRow(key, value) {
+            let valStr = value;
+            if (value === null || value === undefined || String(value).trim() === "") {
+                valStr = "<em class='text-muted'>N/A</em>";
+            } else if (typeof value === 'object' && value !== null) {
+                valStr = `<pre>${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
+            } else {
+                valStr = escapeHtml(String(value));
+            }
+            let attributeDisplayName = key.replace(/([A-Z])/g, ' $1').trim(); // Thêm khoảng trắng cho CamelCase
+            return `<tr data-key="${escapeHtml(key)}"><td><strong>${escapeHtml(attributeDisplayName)}</strong></td><td>${valStr}</td></tr>`;
+        }
+
+        displayOrder.forEach(key => {
+            if (response.hasOwnProperty(key) && key !== 'status_message') {
+                tableHtml += renderRow(key, response[key]);
+                displayedKeys.add(key);
+            }
+        });
+
+        for (const key in response) {
+            if (response.hasOwnProperty(key) && !displayedKeys.has(key) && key !== 'status_message') {
+                tableHtml += renderRow(key, response[key]);
+            }
+        }
+        tableHtml += '</tbody></table>';
+
+        let finalPanelHtml = tableHtml;
+        if (response.status_message) {
+            finalPanelHtml += `<div class="alert alert-warning mt-3 small">${escapeHtml(response.status_message)}</div>`;
+        }
+        nodeDetailsPanel.html(finalPanelHtml);
+        
+        // Thêm nút Refresh Value vào refresh_button_area nếu node là Variable
+        if (response.NodeClass === 'Variable' && nodeDbIdForButton) {
+             const refreshButtonHtml = `
+                <button id="refreshNodeValueBtn" class="btn btn-sm btn-info" data-nodedbid="${escapeHtml(String(nodeDbIdForButton))}">
+                    <i class="fas fa-sync-alt"></i> Làm mới giá trị
+                </button>
+                <span id="refreshStatus" class="ms-2 small-text-muted"></span>`; // Span cho trạng thái refresh
+            refreshButtonArea.html(refreshButtonHtml);
+        }
+    }
+
+    function updateValueFieldsInPanel(response) {
+        const refreshStatusSpan = $('#refreshStatus'); // Lấy span trạng thái (đã được tạo bởi populateNodeDetailsPanel)
+        
+        if (response.error) {
+            if(refreshStatusSpan.length) refreshStatusSpan.html(`<span class="text-danger">${escapeHtml(response.error)}</span>`);
+            return;
+        }
+        
+        const serverTime = response.ValueServerTimestamp ? new Date(response.ValueServerTimestamp).toLocaleTimeString() : 'N/A';
+        if(refreshStatusSpan.length) {
+            refreshStatusSpan.html(`<span class="text-success">Đã làm mới! (Server time: ${escapeHtml(serverTime)})</span>`);
+            setTimeout(() => refreshStatusSpan.empty(), 4000);
+        }
+
+        const fieldsToUpdate = ["Value", "ValueSourceTimestamp", "ValueServerTimestamp", "ValueStatusCode"];
+        fieldsToUpdate.forEach(key => {
+            const row = nodeDetailsPanel.find(`tr[data-key="${key}"]`); // Tìm hàng bằng data-key
+            if (row.length) {
+                let value = response[key];
+                if (value === null || value === undefined || String(value).trim() === "") {
+                    value = "<em class='text-muted'>N/A</em>";
+                } else {
+                     value = escapeHtml(String(value));
+                }
+                row.find('td:last-child').html(value); // Cập nhật ô giá trị (ô thứ 2)
+            }
+        });
+    }
+
+    $('#jstree_container').jstree({
+        'core': {
+            'data': jstreeDataJson,
+            'check_callback': true, 
+            'themes': { 'name': 'default', 'responsive': true, 'icons': true, 'dots': true },
+            'multiple': false 
+        },
+        'plugins': ['types', 'wholerow', 'sort', 'search'],
+        'search': { 'case_insensitive': true, 'show_only_matches': true }
+    });
+    
+    const searchContainer = $('#jstree_search_container');
+    if (searchContainer.length && $('#jstree_search_input').length === 0) { // Chỉ thêm nếu chưa có
+        searchContainer.html('<input type="text" id="jstree_search_input" class="form-control form-control-sm" placeholder="Tìm kiếm node...">');
+        let searchTimeout = false;
+        $('#jstree_search_input').keyup(function () {
+            if(searchTimeout) { clearTimeout(searchTimeout); }
+            searchTimeout = setTimeout(function () {
+                var v = $('#jstree_search_input').val();
+                $('#jstree_container').jstree(true).search(v);
+            }, 250);
+        });
+    }
+
+    $('#jstreeExpandAllBtn').on('click', function () { $('#jstree_container').jstree('open_all'); });
+    $('#jstreeCollapseAllBtn').on('click', function () { $('#jstree_container').jstree('close_all'); });
+    
+    $('#jstree_container').on('select_node.jstree', function (e, data) {
+        var node = data.node;
+        currentSelectedNodeDbIdForDetails = node.data.db_id;
+        // currentSelectedNodeOpcNodeId = node.id; // Có thể dùng node.id nếu cần NodeID OPC UA cho việc khác
+
+        if (currentSelectedNodeDbIdForDetails) {
+            nodeDetailsPanel.html('<p class="text-muted"><i class="fas fa-spinner fa-spin"></i> Đang tải chi tiết node...</p>');
+            refreshButtonArea.empty(); // Xóa nút refresh/status cũ
+
+            $.ajax({
+                url: `/internal/node_details_ajax/${currentSelectedNodeDbIdForDetails}`,
+                type: 'GET',
+                dataType: 'json',
+                success: function(response) {
+                    populateNodeDetailsPanel(response, currentSelectedNodeDbIdForDetails);
+                },
+                error: function(xhr, status, error) {
+                    let errorMsg = `Lỗi AJAX: ${status} - ${error}`;
+                    if(xhr.responseJSON && xhr.responseJSON.error){
+                        errorMsg = `Lỗi từ server: ${xhr.responseJSON.error}`;
+                    }
+                    nodeDetailsPanel.html(`<div class="alert alert-danger">${escapeHtml(errorMsg)}</div>`);
+                    console.error("AJAX Error:", status, error, xhr.responseText);
+                }
+            });
+        } else {
+            nodeDetailsPanel.html('<p class="text-muted">Không có thông tin DB ID cho node này để lấy chi tiết.</p>');
+            refreshButtonArea.empty();
+        }
+    });
+
+    // Sử dụng event delegation cho nút refresh, gắn vào một parent cố định hơn
+    // (ví dụ: document hoặc div cột phải, vì refreshButtonArea có thể bị empty() )
+    $(document).on('click', '#refreshNodeValueBtn', function() { 
+        const nodeDbIdToRefresh = $(this).data('nodedbid'); 
+        
+        if (nodeDbIdToRefresh) {
+            const refreshButton = $(this);
+            const originalButtonHtml = refreshButton.html(); 
+            const refreshStatusSpan = $('#refreshStatus'); // Span này được tạo cùng nút refresh
+
+            refreshButton.html('<i class="fas fa-spinner fa-spin"></i>').prop('disabled', true);
+            if(refreshStatusSpan.length) refreshStatusSpan.empty().html("<em class='text-muted'>Đang làm mới...</em>");
+
+            $.ajax({
+                url: `/internal/node_value_ajax/${nodeDbIdToRefresh}`, // Gọi API chỉ lấy value
+                type: 'GET',
+                dataType: 'json',
+                success: function(response) {
+                    refreshButton.html(originalButtonHtml).prop('disabled', false);
+                    updateValueFieldsInPanel(response);
+                },
+                error: function(xhr, status, error) {
+                    refreshButton.html(originalButtonHtml).prop('disabled', false);
+                    let errorMsg = `Lỗi AJAX: ${status} - ${error}`;
+                    if(xhr.responseJSON && xhr.responseJSON.error){
+                        errorMsg = `Lỗi từ server: ${xhr.responseJSON.error}`;
+                    }
+                    if(refreshStatusSpan.length) refreshStatusSpan.html(`<span class="text-danger small">${escapeHtml(errorMsg)}</span>`);
+                    console.error("AJAX Refresh Error:", status, error, xhr.responseText);
+                }
+            });
+        }
+    });
+});
+</script>
+{% endblock %}

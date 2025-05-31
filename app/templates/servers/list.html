@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+
+{% block title %}Danh sách OPC UA Servers{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2>Danh sách OPC UA Servers</h2>
+        <a href="{{ url_for('add_server') }}" class="btn btn-primary">
+            <i class="fas fa-plus"></i> Thêm Server Mới
+        </a>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+                <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                    {{ message }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+    {% if servers %}
+    <table class="table table-striped table-hover table-responsive-md">
+        <thead class="table-dark">
+            <tr>
+                <th scope="col" style="width: 5%;">#</th>
+                <th scope="col" style="width: 20%;">Tên Server</th>
+                <th scope="col" style="width: 25%;">Endpoint URL</th>
+                <th scope="col" style="width: 15%;">Trạng thái</th>
+                <th scope="col" style="width: 35%;">Hành động</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for server_item in servers %}
+            {% set display_state = server_display_states.get(server_item.id) %}
+            <tr>
+                <th scope="row">{{ loop.index }}</th>
+                <td>
+                    {{ server_item.name }}
+                    {% if server_item.description %}
+                        <small class="d-block text-muted" title="{{ server_item.description }}">{{ server_item.description|truncate(70) }}</small>
+                    {% endif %}
+                </td>
+                <td><small>{{ server_item.endpoint_url }}</small></td>
+                <td>
+                    {% if display_state %}
+                        <span class="badge bg-{{ display_state.class }}">{{ display_state.text }}</span>
+                        {% if display_state.db_state == "CONNECTED" and not display_state.is_live %}
+                            <small class="d-block text-warning">(Runtime Disconnected)</small>
+                        {% endif %}
+                    {% else %}
+                        <span class="badge bg-secondary">Không rõ</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <div class="btn-group-sm mb-1" role="group" aria-label="Server Connection Actions">
+                    {% if display_state %}
+                        {% if display_state.show_connect %}
+                        <form action="{{ url_for('connect_opcua_server', server_id=server_item.id) }}" method="POST" style="display: inline;">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit" class="btn btn-success btn-sm" title="Kết nối đến server này"><i class="fas fa-play"></i></button>
+                        </form>
+                        {% endif %}
+                        {% if display_state.show_disconnect %}
+                        <form action="{{ url_for('disconnect_opcua_server', server_id=server_item.id) }}" method="POST" style="display: inline;">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit" class="btn btn-warning btn-sm" title="Ngắt kết nối khỏi server này"><i class="fas fa-stop"></i></button>
+                        </form>
+                        {% endif %}
+                    {% endif %}
+                    </div>
+
+                    <div class="btn-group-sm mb-1" role="group" aria-label="Server Management Actions">
+                        <a href="{{ url_for('edit_server', server_id=server_item.id) }}" class="btn btn-outline-secondary btn-sm" title="Sửa thông tin server"><i class="fas fa-edit"></i></a>
+                        <form action="{{ url_for('delete_server', server_id=server_item.id) }}" method="POST" style="display: inline;" onsubmit="return confirm('Bạn có chắc chắn muốn xóa server {{ server_item.name }} và tất cả các node đã duyệt của nó không?');">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit" class="btn btn-outline-danger btn-sm" title="Xóa server"><i class="fas fa-trash-alt"></i></button>
+                        </form>
+                    </div>
+                    
+                    <div class="btn-group-sm" role="group" aria-label="Server Node Actions">
+                        <form action="{{ url_for('trigger_browse_and_save_nodes', server_id=server_item.id) }}" method="POST" style="display: inline;">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="max_depth" value="3"> {# Hoặc thêm input cho người dùng chọn #}
+                            <button type="submit" class="btn btn-info btn-sm" title="Duyệt và lưu nodes (độ sâu 3)"
+                                    {% if not (display_state and display_state.is_live) %}disabled{% endif %}>
+                                <i class="fas fa-sitemap"></i> Duyệt
+                            </button>
+                        </form>
+                        
+                        <form action="{{ url_for('stop_browse_for_server', server_id=server_item.id) }}" method="POST" style="display: inline;">
+                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit" class="btn btn-danger btn-sm" title="Dừng quá trình duyệt node hiện tại (nếu có)"
+                                    {% if not (display_state and display_state.is_live) %}disabled{% endif %}>
+                                <i class="fas fa-hand-paper"></i> Dừng
+                            </button>
+                        </form>
+
+                        <a href="{{ url_for('view_server_nodes', server_id=server_item.id) }}" class="btn btn-outline-primary btn-sm" title="Xem các node đã duyệt"><i class="fas fa-list-ul"></i> Xem Nodes</a>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="alert alert-info" role="alert">
+        Chưa có OPC UA server nào được cấu hình. Hãy <a href="{{ url_for('add_server') }}">thêm server mới</a>.
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

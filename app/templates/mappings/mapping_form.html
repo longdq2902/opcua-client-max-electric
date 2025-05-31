@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% from "_form_helpers.html" import render_field %} {# Import macro render_field #}
+
+{% block title %}{{ form_title }}{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2>{{ form_title }}</h2>
+    <hr>
+    <form method="POST" action="{{ form_action_url }}" novalidate>
+        {{ form.hidden_tag() }} {# CSRF token và các hidden field khác #}
+
+        {{ render_field(form.description, class="form-control", placeholder="Ví dụ: Nhiệt độ lò A") }}
+
+        <div class="row">
+            <div class="col-md-6">
+                {{ render_field(form.opc_server, class="form-select", id="opc_server_select") }}
+            </div>
+            <div class="col-md-6">
+                {{ render_field(form.opc_node_db_id, class="form-select", id="opc_node_select") }}
+                <small class="form-text text-muted">Chỉ các node kiểu Variable sẽ được liệt kê. Danh sách node sẽ cập nhật khi bạn chọn Server.</small>
+            </div>
+        </div>
+
+        {{ render_field(form.ioa_mapping, class="form-control", type="number") }}
+
+        <div class="row">
+            <div class="col-md-6">
+                {{ render_field(form.sampling_interval_ms, class="form-control", type="number") }}
+            </div>
+            <div class="col-md-6">
+                {{ render_field(form.publishing_interval_ms, class="form-control", type="number") }}
+            </div>
+        </div>
+
+        {{ render_field(form.is_active, class="form-check-input") }} <label for="is_active" class="form-check-label">Kích hoạt subscription cho mapping này?</label>
+
+        <hr>
+        {{ form.submit(class="btn btn-primary mt-3") }}
+        <a href="{{ url_for('mappings.list_mappings') }}" class="btn btn-secondary mt-3">Hủy</a>
+    </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script>
+$(document).ready(function() {
+    // Định nghĩa hàm populateNodes để có thể tái sử dụng
+    function populateNodes(serverId, nodeToSelectId) {
+        var nodeSelect = $('#opc_node_select');
+        // Xóa các lựa chọn cũ và hiển thị trạng thái đang tải
+        nodeSelect.empty().append($('<option>', { value: '', text: 'Đang tải Nodes...' }));
+
+        if (serverId) {
+            $.ajax({
+                // Đảm bảo URL này đúng và server_id được thay thế chính xác
+                url: "{{ url_for('mappings.get_nodes_for_server_ajax', server_id=0) }}".replace('0', serverId),
+                type: 'GET',
+                dataType: 'json',
+                success: function(data) {
+                    nodeSelect.empty().append($('<option>', { value: '', text: '-- Chọn Node --' }));
+                    $.each(data, function(key, entry) {
+                        var option = $('<option>', {
+                            value: entry.id, // Giá trị của option là OpcNode.id (DB ID)
+                            text: entry.text  // Text hiển thị là "DisplayName (NodeIdString)"
+                        });
+                        // Nếu nodeToSelectId được cung cấp và khớp với entry.id, chọn nó
+                        if (nodeToSelectId && String(entry.id) === String(nodeToSelectId)) {
+                            option.prop('selected', true);
+                        }
+                        nodeSelect.append(option);
+                    });
+                },
+                error: function() {
+                    nodeSelect.empty().append($('<option>', { value: '', text: 'Lỗi tải Nodes' }));
+                    // Cân nhắc hiển thị lỗi một cách thân thiện hơn thay vì alert
+                    // console.error('Lỗi tải danh sách node cho server ID: ' + serverId);
+                    flash('Không thể tải danh sách node cho server đã chọn.', 'danger'); // Sử dụng flash nếu có thể hoặc một div thông báo
+                }
+            });
+        } else {
+            nodeSelect.empty().append($('<option>', { value: '', text: '-- Chọn Server trước --' }));
+        }
+    }
+
+    // Gắn sự kiện change cho dropdown server
+    $('#opc_server_select').on('change', function() {
+        var serverId = $(this).val();
+        // Khi người dùng chủ động thay đổi server, không cần chọn sẵn node cũ nữa
+        populateNodes(serverId, null); 
+    });
+
+    // XỬ LÝ KHI TẢI TRANG EDIT LẦN ĐẦU
+    // Lấy initialServerId và initialNodeId từ các biến Jinja2 được truyền từ route Flask
+    // (Trong route edit_mapping, bạn cần truyền js_initial_server_id và js_initial_node_id)
+    var initialServerId = "{{ js_initial_server_id if js_initial_server_id is not none else '' }}";
+    var initialNodeId = "{{ js_initial_node_id if js_initial_node_id is not none else '' }}";
+    
+    // Nếu là trang edit và có thông tin server ban đầu
+    if (initialServerId) {
+        // Bước 1: Đảm bảo dropdown server hiển thị đúng giá trị server ban đầu.
+        // WTForms có thể đã tự động chọn đúng server nếu form.opc_server.data được set đúng trong route.
+        // Dòng sau để chắc chắn hơn, đặc biệt nếu có vấn đề với việc render của WTForms.
+        $('#opc_server_select').val(initialServerId); 
+        
+        // Bước 2: Gọi populateNodes để tải danh sách node cho server ban đầu VÀ chọn node ban đầu.
+        populateNodes(initialServerId, initialNodeId);
+    }
+    // Nếu là trang add mới (initialServerId rỗng), không làm gì thêm ở đây, 
+    // người dùng sẽ tự chọn server và dropdown node sẽ được cập nhật qua sự kiện 'change'.
+});
+</script>
+{% endblock %}

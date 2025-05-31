@@ -1,0 +1,20 @@
+{# app/templates/_form_helpers.html #}
+{% macro render_field(field, label_visible=true) %}
+  <div class="mb-3 {% if field.errors %}has-error{% endif %}">
+    {% if label_visible %}
+      {{ field.label(class="form-label") }}
+    {% endif %}
+    {{ field(**kwargs)|safe }} {# Thêm class và các thuộc tính khác vào đây, ví dụ class="form-control" #}
+
+    {% if field.errors %}
+      {% for error in field.errors %}
+        <div class="invalid-feedback d-block"> {{ error }}
+        </div>
+      {% endfor %}
+    {% endif %}
+
+    {% if field.description %}
+      <small class="form-text text-muted">{{ field.description|safe }}</small>
+    {% endif %}
+  </div>
+{% endmacro %}
