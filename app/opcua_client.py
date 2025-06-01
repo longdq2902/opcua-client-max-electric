@@ -8,6 +8,9 @@ from asyncua.common.node import Node as AsyncuaNode # Import lớp Node đúng
 from typing import Optional # Thêm ở đầu file
 from async_worker import get_async_worker
 from app import db 
+import requests
+import json
+
 
 
 
@@ -59,83 +62,167 @@ async def get_server_security_params(server_config: OpcServer):
         # if server_config.server_cert_path: # Nếu có trường này trong model
         #     params['server_certificate_path'] = server_config.server_cert_path
     
-    user_identity = None
+    # user_identity = None
+    # if server_config.user_auth_type == 'Username':
+    #     if server_config.username and server_config.password:
+    #         user_identity = ua.UserIdentityToken(user_name=server_config.username, password=server_config.password)
+    #     else:
+    #         logger.warning(f"Server {server_config.name} cấu hình Username auth nhưng thiếu username/password.")
+    # # Thêm xử lý cho 'Certificate' user auth type nếu cần
+
+    # return params, user_identity
+     # Xử lý User Authentication
+    user_credentials_tuple = None 
     if server_config.user_auth_type == 'Username':
-        if server_config.username and server_config.password:
-            user_identity = ua.UserIdentityToken(UserName=server_config.username, Password=server_config.password)
+        if server_config.username: # Password có thể là chuỗi rỗng nếu server cho phép
+            user_credentials_tuple = (server_config.username, server_config.password or "")
+            logger.info(f"Chuẩn bị user credentials cho client: Username='{server_config.username}'")
         else:
-            logger.warning(f"Server {server_config.name} cấu hình Username auth nhưng thiếu username/password.")
-    # Thêm xử lý cho 'Certificate' user auth type nếu cần
+            logger.warning(f"Server '{server_config.name}' cấu hình Username auth nhưng thiếu username.")
+    elif server_config.user_auth_type != 'Anonymous':
+        logger.warning(f"Loại xác thực người dùng '{server_config.user_auth_type}' chưa được hỗ trợ đầy đủ trong get_server_security_params.")
+    
+    return params, user_credentials_tuple
 
-    return params, user_identity
 
+# async def connect_server(server_config: OpcServer):
+#     """
+#     Thiết lập kết nối đến một OPC UA server dựa trên cấu hình.
+#     server_config: Đối tượng OpcServer từ database.
+#     Trả về True nếu kết nối thành công, False nếu thất bại.
+#     """
+#     global active_clients
+#     server_id = server_config.id
+
+#     if server_id in active_clients:
+#         logger.info(f"Server ID {server_id} ({server_config.name}) đã có kết nối hoạt động.")
+#         # Kiểm tra lại trạng thái kết nối thực sự của client (nếu cần)
+#         try:
+#             # Một cách đơn giản để kiểm tra là đọc một node cơ bản như ServerStatus
+#             await active_clients[server_id].get_node(ua. γνωστό_NodeId.Server_ServerStatus).read_data_value()
+#             logger.info(f"Kết nối hiện tại tới server ID {server_id} vẫn còn hiệu lực.")
+#             return True # Giả sử kết nối vẫn tốt
+#         except Exception as e:
+#             logger.warning(f"Kết nối hiện tại tới server ID {server_id} có vấn đề: {e}. Thử ngắt kết nối cũ.")
+#             await disconnect_server(server_id) # Cố gắng dọn dẹp client cũ
+
+#     logger.info(f"Đang thử kết nối đến server: {server_config.name} ({server_config.endpoint_url})")
+#     # worker = get_async_worker()
+
+#     client = AsyncuaClient(url=server_config.endpoint_url, timeout=15)
+
+#     # Thiết lập bảo mật (nếu có)
+#     security_params, user_identity_token = await get_server_security_params(server_config)
+    
+#     if security_params.get('policy_uri') and security_params.get('mode'):
+#         try:
+#             logger.info(f"Áp dụng cài đặt bảo mật cho server {server_config.name}: Mode={security_params['mode']}, Policy={security_params['policy_uri']}")
+#             await client.set_security_string(
+#                 f"{security_params['policy_uri']}#{security_params['mode'].name.replace('_','')}" # Tạo security string
+#             ) 
+#             # Hoặc dùng client.set_security() nếu bạn muốn truyền các tham số riêng lẻ
+#             # await client.set_security(
+#             #     policy_uri=security_params['policy_uri'],
+#             #     certificate=security_params.get('certificate_path'),
+#             #     private_key=security_params.get('private_key_path'),
+#             #     server_certificate=security_params.get('server_certificate_path'),
+#             #     mode=security_params['mode']
+#             # )
+
+#             if server_config.client_cert_path and server_config.client_key_path:
+#                  # asyncua tự động load cert và key nếu security string yêu cầu
+#                  # Hoặc bạn có thể load thủ công nếu cần thiết:
+#                  # await client.load_client_certificate(server_config.client_cert_path)
+#                  # await client.load_private_key(server_config.client_key_path)
+#                 logger.info(f"Sử dụng client certificate: {server_config.client_cert_path}")
+
+
+#         except Exception as e:
+#             logger.error(f"Lỗi khi thiết lập bảo mật cho server {server_config.name}: {str(e)}", exc_info=True)
+#             # Không return False ngay, vẫn thử kết nối nếu server cho phép kết nối không bảo mật
+#             # hoặc nếu security string không bắt buộc.
+
+
+#     # Thiết lập User Identity Token (nếu có)
+#     if user_identity_token:
+#         # client.user_token = user_identity_token
+#         client.set_user(server_config.username)
+#         client.set_password(server_config.password)
+#         logger.info(f"Sử dụng user identity: {server_config.user_auth_type} - Username: {server_config.username}")
+#     elif server_config.user_auth_type != 'Anonymous':
+#         logger.warning(f"Server {server_config.name} yêu cầu {server_config.user_auth_type} nhưng thông tin không đủ.")
+
+
+#     try:
+#         await client.connect()
+#         logger.info(f"Kết nối thành công đến server: {server_config.name}")
+#         active_clients[server_id] = client
+#         return True
+#     except ConnectionRefusedError:
+#         logger.error(f"Kết nối bị từ chối từ server: {server_config.name} ({server_config.endpoint_url})")
+#     except asyncio.TimeoutError:
+#         logger.error(f"Hết thời gian chờ khi kết nối đến server: {server_config.name} ({server_config.endpoint_url})")
+#     except Exception as e:
+#         logger.error(f"Lỗi không xác định khi kết nối đến server {server_config.name}: {str(e)}", exc_info=True)
+    
+#     # Nếu kết nối thất bại, đảm bảo client được đóng (dù có thể chưa connect)
+#     try:
+#         await client.disconnect()
+#     except Exception as e :
+#         pass # Bỏ qua lỗi khi disconnect client chưa thực sự connect
+#     return False
 
 async def connect_server(server_config: OpcServer):
-    """
-    Thiết lập kết nối đến một OPC UA server dựa trên cấu hình.
-    server_config: Đối tượng OpcServer từ database.
-    Trả về True nếu kết nối thành công, False nếu thất bại.
-    """
     global active_clients
     server_id = server_config.id
 
-    if server_id in active_clients:
-        logger.info(f"Server ID {server_id} ({server_config.name}) đã có kết nối hoạt động.")
-        # Kiểm tra lại trạng thái kết nối thực sự của client (nếu cần)
-        try:
-            # Một cách đơn giản để kiểm tra là đọc một node cơ bản như ServerStatus
-            await active_clients[server_id].get_node(ua. γνωστό_NodeId.Server_ServerStatus).read_data_value()
-            logger.info(f"Kết nối hiện tại tới server ID {server_id} vẫn còn hiệu lực.")
-            return True # Giả sử kết nối vẫn tốt
-        except Exception as e:
-            logger.warning(f"Kết nối hiện tại tới server ID {server_id} có vấn đề: {e}. Thử ngắt kết nối cũ.")
-            await disconnect_server(server_id) # Cố gắng dọn dẹp client cũ
+    # ... (phần kiểm tra active_clients như cũ) ...
+    # if server_id in active_clients: ...
 
     logger.info(f"Đang thử kết nối đến server: {server_config.name} ({server_config.endpoint_url})")
-    # worker = get_async_worker()
-
-    client = AsyncuaClient(url=server_config.endpoint_url, timeout=15)
-
-    # Thiết lập bảo mật (nếu có)
-    security_params, user_identity_token = await get_server_security_params(server_config)
     
-    if security_params.get('policy_uri') and security_params.get('mode'):
+    # Khởi tạo client, không truyền loop, timeout vẫn giữ
+    client = AsyncuaClient(url=server_config.endpoint_url, timeout=15) 
+
+    # Lấy thông tin bảo mật và user
+    security_args_for_set_security, user_creds = await get_server_security_params(server_config)
+    
+    # 1. Thiết lập User Identity (NÊN làm TRƯỚC khi set_security)
+    if user_creds:
         try:
-            logger.info(f"Áp dụng cài đặt bảo mật cho server {server_config.name}: Mode={security_params['mode']}, Policy={security_params['policy_uri']}")
-            await client.set_security_string(
-                f"{security_params['policy_uri']}#{security_params['mode'].name.replace('_','')}" # Tạo security string
-            ) 
-            # Hoặc dùng client.set_security() nếu bạn muốn truyền các tham số riêng lẻ
-            # await client.set_security(
-            #     policy_uri=security_params['policy_uri'],
-            #     certificate=security_params.get('certificate_path'),
-            #     private_key=security_params.get('private_key_path'),
-            #     server_certificate=security_params.get('server_certificate_path'),
-            #     mode=security_params['mode']
-            # )
+            client.set_user(user_creds[0])
+            if user_creds[1] is not None: # Chỉ set password nếu có (có thể là chuỗi rỗng)
+                 client.set_password(user_creds[1])
+            logger.info(f"Đã đặt user/password cho client (Username: '{user_creds[0]}').")
+        except Exception as e_user_setup:
+            logger.error(f"Lỗi khi đặt user/password cho client: {e_user_setup}", exc_info=True)
+            # Tùy thuộc server có cho phép kết nối nếu user/pass sai hoặc không có không.
+            # Nếu user/pass là bắt buộc, có thể return False ở đây.
 
-            if server_config.client_cert_path and server_config.client_key_path:
-                 # asyncua tự động load cert và key nếu security string yêu cầu
-                 # Hoặc bạn có thể load thủ công nếu cần thiết:
-                 # await client.load_client_certificate(server_config.client_cert_path)
-                 # await client.load_private_key(server_config.client_key_path)
-                logger.info(f"Sử dụng client certificate: {server_config.client_cert_path}")
+    # 2. Thiết lập Security Mode và Policy (nếu có)
+    # security_args_for_set_security chứa các key: policy_uri, mode, certificate, private_key
+    if security_args_for_set_security.get('policy_uri') and security_args_for_set_security.get('mode'):
+        try:
+            logger.info(f"Áp dụng cài đặt bảo mật cho server '{server_config.name}': "
+                        f"Mode={security_args_for_set_security['mode'].name}, "
+                        f"PolicyURI='{security_args_for_set_security['policy_uri']}', "
+                        f"Cert='{security_args_for_set_security.get('certificate', 'N/A')}', "
+                        f"Key='{security_args_for_set_security.get('private_key', 'N/A')}'")
+            
+            await client.set_security(
+                policy_uri=security_args_for_set_security['policy_uri'],
+                certificate=security_args_for_set_security.get('certificate'), # Đường dẫn file cert
+                private_key=security_args_for_set_security.get('private_key'), # Đường dẫn file key
+                # server_certificate=security_args_for_set_security.get('server_certificate'), # Nếu có
+                mode=security_args_for_set_security['mode'] # ua.MessageSecurityMode enum
+            )
+            # Nếu set_security thành công và có cert/key, asyncua sẽ tự load chúng khi client.connect().
+        except Exception as e_sec:
+            logger.error(f"Lỗi khi thiết lập bảo mật (set_security) cho server '{server_config.name}': {str(e_sec)}", exc_info=True)
+            # Nếu bảo mật là bắt buộc và không set được, có thể return False.
+            # Nếu server cho phép fallback về chế độ không bảo mật (ít khả năng), thì tiếp tục.
 
-
-        except Exception as e:
-            logger.error(f"Lỗi khi thiết lập bảo mật cho server {server_config.name}: {str(e)}", exc_info=True)
-            # Không return False ngay, vẫn thử kết nối nếu server cho phép kết nối không bảo mật
-            # hoặc nếu security string không bắt buộc.
-
-
-    # Thiết lập User Identity Token (nếu có)
-    if user_identity_token:
-        client.user_token = user_identity_token
-        logger.info(f"Sử dụng user identity: {server_config.user_auth_type} - Username: {server_config.username}")
-    elif server_config.user_auth_type != 'Anonymous':
-        logger.warning(f"Server {server_config.name} yêu cầu {server_config.user_auth_type} nhưng thông tin không đủ.")
-
-
+    # 3. Thực hiện kết nối
     try:
         await client.connect()
         logger.info(f"Kết nối thành công đến server: {server_config.name}")
@@ -143,16 +230,20 @@ async def connect_server(server_config: OpcServer):
         return True
     except ConnectionRefusedError:
         logger.error(f"Kết nối bị từ chối từ server: {server_config.name} ({server_config.endpoint_url})")
-    except asyncio.TimeoutError:
-        logger.error(f"Hết thời gian chờ khi kết nối đến server: {server_config.name} ({server_config.endpoint_url})")
-    except Exception as e:
-        logger.error(f"Lỗi không xác định khi kết nối đến server {server_config.name}: {str(e)}", exc_info=True)
-    
-    # Nếu kết nối thất bại, đảm bảo client được đóng (dù có thể chưa connect)
+    except asyncio.TimeoutError: # Bắt cụ thể asyncio.TimeoutError
+        logger.error(f"Hết thời gian chờ (asyncio) khi kết nối đến server: {server_config.name} ({server_config.endpoint_url})")
+    except ua.UaError as e_ua: # Bắt các lỗi OPC UA cụ thể
+        logger.error(f"Lỗi OPC UA khi kết nối server '{server_config.name}': {str(e_ua)}", exc_info=True)
+    except Exception as e: # Các lỗi khác
+        logger.error(f"Lỗi không xác định khi thực hiện client.connect() cho server '{server_config.name}': {str(e)}", exc_info=True)
+
+    # Nếu kết nối thất bại ở bất kỳ bước nào sau khi tạo client
     try:
-        await client.disconnect()
-    except Exception as e :
-        pass # Bỏ qua lỗi khi disconnect client chưa thực sự connect
+        # Cố gắng dọn dẹp client nếu nó đã được tạo nhưng connect() thất bại
+        # Hoặc nếu set_security, set_user thất bại và chúng ta quyết định không tiếp tục
+        await client.disconnect() 
+    except Exception:
+        pass # Bỏ qua lỗi khi disconnect client có thể chưa hoàn toàn sẵn sàng
     return False
 
 
@@ -718,19 +809,18 @@ class SubHandler:
         payload = {
             "ioa": self.ioa_mapping,
             "value": val
-            # Bạn có thể thêm timestamp hoặc các thông tin khác vào payload nếu API thứ 3 hỗ trợ
-            # "timestamp": source_timestamp.isoformat() if source_timestamp else None
         }
 
         try:
             logger.debug(f"SubHandler (MappingID: {self.mapping_id}): Gọi API '{self.api_url}' với payload: {payload}")
-            
+            headers = {'Content-Type': 'application/json'}
             # Thực hiện lời gọi API (blocking) trong một executor để không chặn event loop
             response = await self.worker_loop.run_in_executor(
-                None,  # Sử dụng ThreadPoolExecutor mặc định
-                lambda: requests.post(self.api_url, json=payload, timeout=10) # timeout 10 giây
+                None,  # Sử dụng ThreadPoolExecutor mặc định của loop
+                lambda: requests.put(self.api_url, data=json.dumps(payload), headers=headers,timeout=10) # Sử dụng PUT
             )
             
+            # response = requests.put(self.api_url, headers=headers, json=payload)
             logger.info(
                 f"SubHandler (MappingID: {self.mapping_id}): Gọi API thành công. "
                 f"Status: {response.status_code}, Response (100 chars): {response.text[:100]}"
@@ -971,3 +1061,4 @@ def unsubscribe_all_runtime_subscriptions_opcua(): # Không cần app_context v�
 
     logger.info(f"'Unsubscribe All Runtime Subscriptions' hoàn tất. Thành công: {unsubscribed_count}, Thất bại: {failed_count}, Tổng số đã thử: {len(mapping_ids_to_unsubscribe)}")
     return {"total_runtime_before": len(mapping_ids_to_unsubscribe), "success": unsubscribed_count, "failed": failed_count}
+

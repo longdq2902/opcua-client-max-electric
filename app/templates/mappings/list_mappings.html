@@ -12,7 +12,6 @@
     </div>
 
     <div class="mb-3">
-        {# Nút Subscribe All / Unsubscribe All #}
         <form action="{{ url_for('mappings.subscribe_all_action') }}" method="POST" style="display: inline-block;" 
               onsubmit="return confirm('Bạn có muốn thử subscribe tất cả các mapping đang Kích hoạt (Active) trong CSDL không? (Chỉ các server đang kết nối mới được thực hiện)');">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -37,107 +36,119 @@
     {% endwith %}
 
     {% if mappings %}
-    <div class="table-responsive">
-        <table class="table table-striped table-hover table-sm">
-            <thead class="table-dark">
-                <tr>
-                    {# Bỏ cột checkbox chọn tất cả #}
-                    <th scope="col" style="width: 5%;">ID</th>
-                    <th scope="col" style="width: 15%;">Mô tả</th>
-                    <th scope="col" style="width: 15%;">OPC Server</th>
-                    <th scope="col" style="width: 20%;">OPC Node (Variable)</th>
-                    <th scope="col" style="width: 10%;">IOA Mapping</th>
-                    <th scope="col" style="width: 10%;" title="Sampling Interval / Publishing Interval (ms)">Intervals (S/P ms)</th>
-                    <th scope="col" style="width: 10%;">Kích hoạt (DB)</th>
-                    <th scope="col" style="width: 15%;">Trạng thái Runtime (Nhấn để đổi)</th>
-                    <th scope="col" style="min-width: 90px;">Hành động</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for mapping_item in mappings %}
-                <tr>
-                    {# Bỏ ô checkbox cho từng dòng #}
-                    <td>{{ mapping_item.id }}</td>
-                    <td title="{{ mapping_item.description if mapping_item.description }}">{{ mapping_item.description|truncate(25) if mapping_item.description else '-' }}</td>
-                    <td>
-                        {% if mapping_item.opc_server %}
-                            <small title="{{ mapping_item.opc_server.endpoint_url }}">{{ mapping_item.opc_server.name }}</small>
-                        {% else %}<span class="text-muted">N/A</span>{% endif %}
-                    </td>
-                    <td>
-                        {% if mapping_item.opc_node %}
-                            <span title="{{ mapping_item.opc_node.node_id_string }}">{{ mapping_item.opc_node.display_name|truncate(30) if mapping_item.opc_node.display_name else mapping_item.opc_node.browse_name|truncate(30) }}</span>
-                            <small class="d-block text-muted" title="{{ mapping_item.opc_node.node_id_string }}">{{ mapping_item.opc_node.node_id_string|truncate(25, end='...') }}</small>
-                        {% else %}<span class="text-muted">N/A (Node DB ID: {{ mapping_item.opc_node_db_id }})</span>{% endif %}
-                    </td>
-                    <td class="text-center">{{ mapping_item.ioa_mapping }}</td>
-                    <td><small>{{ mapping_item.sampling_interval_ms }}/{{ mapping_item.publishing_interval_ms }}</small></td>
-                    <td class="text-center"> {# Nút Toggle DB Active Status #}
-                        <form action="{{ url_for('mappings.db_only_toggle_active', mapping_id=mapping_item.id) }}" method="POST" style="display: inline;">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            {% if mapping_item.is_active %}
-                                <input type="hidden" name="db_action" value="deactivate_db">
-                                <button type="submit" class="btn btn-link p-0 m-0 align-baseline" 
-                                        title="Trạng thái DB: Active. Nhấn để chuyển thành Inactive (chỉ trong DB).">
-                                    <i class="fas fa-toggle-on fa-lg text-success"></i>
-                                </button>
-                            {% else %}
-                                <input type="hidden" name="db_action" value="activate_db">
-                                <button type="submit" class="btn btn-link p-0 m-0 align-baseline" 
-                                        title="Trạng thái DB: Inactive. Nhấn để chuyển thành Active (chỉ trong DB).">
-                                    <i class="fas fa-toggle-off fa-lg text-secondary"></i>
-                                </button>
-                            {% endif %}
-                        </form>
-                    </td>
-                    
-                    <td class="text-center"> {# Nút tương tác cho Trạng thái Runtime #}
-                        {% set is_runtime_subscribed = mapping_runtime_states.get(mapping_item.id, False) %}
-                        {% set server_is_connected = server_states_for_template.get(mapping_item.server_id, {}).get('is_live', False) %}
-                        
-                        {% if is_runtime_subscribed %}
-                            <form action="{{ url_for('mappings.runtime_unsubscribe_single_mapping', mapping_id=mapping_item.id) }}" method="POST" style="display: inline;"
-                                  onsubmit="return confirm('Bạn có chắc chắn muốn Unsubscribe runtime mapping IOA {{ mapping_item.ioa_mapping }} không?');">
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                <button type="submit" class="btn btn-primary btn-sm" title="Đang Subscribed. Nhấn để Unsubscribe Runtime.">
-                                    <i class="fas fa-link"></i> Subscribed
-                                </button>
-                            </form>
-                        {% else %}
-                            {% set can_subscribe_runtime = mapping_item.is_active and server_is_connected %}
-                            <form action="{{ url_for('mappings.runtime_subscribe_single_mapping', mapping_id=mapping_item.id) }}" method="POST" style="display: inline;"
-                                  onsubmit="return confirm('Bạn có chắc chắn muốn Subscribe runtime mapping IOA {{ mapping_item.ioa_mapping }} không?');">
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                <button type="submit" class="btn btn-outline-success btn-sm" 
-                                        title="{% if can_subscribe_runtime %}Nhấn để Subscribe Runtime.{% else %}Không thể Subscribe: Cần Active trong DB và Server kết nối.{% endif %}"
-                                        {% if not can_subscribe_runtime %}disabled{% endif %}>
-                                    <i class="fas fa-unlink"></i> Not Subscribed
-                                </button>
-                            </form>
-                        {% endif %}
-                    </td>
+    {# Form cho hành động hàng loạt #}
+    <form id="batchActionForm" method="POST" action="{{ url_for('mappings.batch_toggle_active') }}"> {# Action sẽ trỏ đến route xử lý batch #}
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="mb-3">
+            <button type="submit" name="batch_action" value="activate_selected" class="btn btn-outline-success btn-sm">
+                <i class="fas fa-check-circle"></i> Kích hoạt (DB) đã chọn
+            </button>
+            <button type="submit" name="batch_action" value="deactivate_selected" class="btn btn-outline-secondary btn-sm">
+                <i class="fas fa-times-circle"></i> Vô hiệu hóa (DB) đã chọn
+            </button>
+        </div>
 
-                    <td> {# Cột Hành động - Chỉ còn Sửa và Xóa #}
-                        <div class="btn-group btn-group-sm" role="group">
-                            <a href="{{ url_for('mappings.edit_mapping', mapping_id=mapping_item.id) }}" class="btn btn-outline-secondary" title="Sửa Mapping"><i class="fas fa-edit"></i></a>
-                            <form action="{{ url_for('mappings.delete_mapping', mapping_id=mapping_item.id) }}" method="POST" style="display: inline;" onsubmit="return confirm('Bạn có chắc chắn muốn xóa mapping cho IOA {{ mapping_item.ioa_mapping }} (Node: {{ mapping_item.opc_node.display_name if mapping_item.opc_node else mapping_item.opc_node_db_id }}) không?');">
+        <div class="table-responsive">
+            <table class="table table-striped table-hover table-sm">
+                <thead class="table-dark">
+                    <tr>
+                        <th scope="col" style="width: 3%;"><input type="checkbox" id="selectAllMappings" title="Chọn/Bỏ chọn tất cả"></th>
+                        <th scope="col" style="width: 5%;">ID</th>
+                        <th scope="col" style="width: 15%;">Mô tả</th>
+                        <th scope="col" style="width: 15%;">OPC Server</th>
+                        <th scope="col" style="width: 20%;">OPC Node (Variable)</th>
+                        <th scope="col" style="width: 7%;">IOA</th>
+                        <th scope="col" style="width: 10%;" title="Sampling Interval / Publishing Interval (ms)">Intervals</th>
+                        <th scope="col" style="width: 10%;">Kích hoạt (DB)</th>
+                        <th scope="col" style="width: 10%;">Trạng thái Runtime</th>
+                        <th scope="col" style="min-width: 90px;">Hành động</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for mapping_item in mappings %}
+                    <tr>
+                        <td><input type="checkbox" name="mapping_ids" value="{{ mapping_item.id }}" class="mapping-checkbox"></td>
+                        <td>{{ mapping_item.id }}</td>
+                        <td title="{{ mapping_item.description if mapping_item.description }}">{{ mapping_item.description|truncate(25) if mapping_item.description else '-' }}</td>
+                        <td>
+                            {% if mapping_item.opc_server %}
+                                <small title="{{ mapping_item.opc_server.endpoint_url }}">{{ mapping_item.opc_server.name }}</small>
+                            {% else %}<span class="text-muted">N/A</span>{% endif %}
+                        </td>
+                        <td>
+                            {% if mapping_item.opc_node %}
+                                <span title="{{ mapping_item.opc_node.node_id_string }}">{{ mapping_item.opc_node.display_name|truncate(30) if mapping_item.opc_node.display_name else mapping_item.opc_node.browse_name|truncate(30) }}</span>
+                                <small class="d-block text-muted" title="{{ mapping_item.opc_node.node_id_string }}">{{ mapping_item.opc_node.node_id_string|truncate(25, end='...') }}</small>
+                            {% else %}<span class="text-muted">N/A (Node DB ID: {{ mapping_item.opc_node_db_id }})</span>{% endif %}
+                        </td>
+                        <td class="text-center">{{ mapping_item.ioa_mapping }}</td>
+                        <td><small>{{ mapping_item.sampling_interval_ms }}/{{ mapping_item.publishing_interval_ms }}</small></td>
+                        <td class="text-center"> {# Nút Toggle DB Active Status #}
+                            <form action="{{ url_for('mappings.db_only_toggle_active', mapping_id=mapping_item.id) }}" method="POST" style="display: inline;">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                <button type="submit" class="btn btn-outline-danger" title="Xóa Mapping"><i class="fas fa-trash-alt"></i></button>
+                                {% if mapping_item.is_active %}
+                                    <input type="hidden" name="db_action" value="deactivate_db">
+                                    <button type="submit" class="btn btn-link p-0 m-0 align-baseline" 
+                                            title="Trạng thái DB: Active. Nhấn để chuyển thành Inactive (chỉ trong DB).">
+                                        <i class="fas fa-toggle-on fa-lg text-success"></i>
+                                    </button>
+                                {% else %}
+                                    <input type="hidden" name="db_action" value="activate_db">
+                                    <button type="submit" class="btn btn-link p-0 m-0 align-baseline" 
+                                            title="Trạng thái DB: Inactive. Nhấn để chuyển thành Active (chỉ trong DB).">
+                                        <i class="fas fa-toggle-off fa-lg text-secondary"></i>
+                                    </button>
+                                {% endif %}
                             </form>
-                        </div>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
+                        </td>
+                        
+                        <td class="text-center"> {# Nút tương tác cho Trạng thái Runtime #}
+                            {% set is_runtime_subscribed = mapping_runtime_states.get(mapping_item.id, False) %}
+                            {% set server_is_connected = server_states_for_template.get(mapping_item.server_id, {}).get('is_live', False) %}
+                            
+                            {% if is_runtime_subscribed %}
+                                <form action="{{ url_for('mappings.runtime_unsubscribe_single_mapping', mapping_id=mapping_item.id) }}" method="POST" style="display: inline;"
+                                      onsubmit="return confirm('Bạn có chắc chắn muốn Unsubscribe runtime mapping IOA {{ mapping_item.ioa_mapping }} không?');">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="btn btn-primary btn-sm" title="Đang Subscribed. Nhấn để Unsubscribe Runtime.">
+                                        <i class="fas fa-link"></i> Subscribed
+                                    </button>
+                                </form>
+                            {% else %}
+                                {% set can_subscribe_runtime = mapping_item.is_active and server_is_connected %}
+                                <form action="{{ url_for('mappings.runtime_subscribe_single_mapping', mapping_id=mapping_item.id) }}" method="POST" style="display: inline;"
+                                      onsubmit="return confirm('Bạn có chắc chắn muốn Subscribe runtime mapping IOA {{ mapping_item.ioa_mapping }} không?');">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="btn btn-outline-success btn-sm" 
+                                            title="{% if can_subscribe_runtime %}Nhấn để Subscribe Runtime.{% else %}Không thể Subscribe: Cần Active trong DB và Server kết nối.{% endif %}"
+                                            {% if not can_subscribe_runtime %}disabled{% endif %}>
+                                        <i class="fas fa-unlink"></i> Not Subscribed
+                                    </button>
+                                </form>
+                            {% endif %}
+                        </td>
+
+                        <td> {# Cột Hành động - Chỉ còn Sửa và Xóa #}
+                            <div class="btn-group btn-group-sm" role="group">
+                                <a href="{{ url_for('mappings.edit_mapping', mapping_id=mapping_item.id) }}" class="btn btn-outline-secondary" title="Sửa Mapping"><i class="fas fa-edit"></i></a>
+                                <form action="{{ url_for('mappings.delete_mapping', mapping_id=mapping_item.id) }}" method="POST" style="display: inline;" onsubmit="return confirm('Bạn có chắc chắn muốn xóa mapping cho IOA {{ mapping_item.ioa_mapping }} (Node: {{ mapping_item.opc_node.display_name if mapping_item.opc_node else mapping_item.opc_node_db_id }}) không?');">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="btn btn-outline-danger" title="Xóa Mapping"><i class="fas fa-trash-alt"></i></button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </form> {# Đóng form#batchActionForm #}
     {% else %}
     <div class="alert alert-info">
         Chưa có subscription mapping nào được tạo.
         <a href="{{ url_for('mappings.add_mapping') }}">Thêm mapping mới ngay!</a>
     </div>
     {% endif %}
-    {# Bỏ form batchActionForm nếu không dùng #}
 </div>
 {% endblock %}
 
@@ -145,10 +156,35 @@
 {{ super() }}
 <script>
 $(document).ready(function() {
-    // Bỏ phần JavaScript cho selectAllMappings và batchActionForm nếu không dùng nữa
-    // $('#selectAllMappings').on('change', function() { ... });
-    // $('.mapping-checkbox').on('change', function() { ... });
-    // $('#batchActionForm').on('submit', function(event) { ... });
+    // Logic cho checkbox "Chọn tất cả"
+    $('#selectAllMappings').on('change', function() {
+        $('.mapping-checkbox').prop('checked', $(this).prop('checked'));
+    });
+
+    // Bỏ check "Chọn tất cả" nếu một checkbox con bị bỏ check
+    $('.mapping-checkbox').on('change', function() {
+        if ($('.mapping-checkbox:checked').length === $('.mapping-checkbox').length) {
+            $('#selectAllMappings').prop('checked', true);
+        } else {
+            $('#selectAllMappings').prop('checked', false);
+        }
+    });
+
+    // Xử lý submit cho form batchActionForm
+    // Đảm bảo chỉ submit khi có ít nhất 1 checkbox được chọn
+    $('#batchActionForm').on('submit', function(event) {
+        // Kiểm tra xem nút submit nào được nhấn (activate_selected hoặc deactivate_selected)
+        var pressedButton = $(document.activeElement);
+        if (pressedButton.attr('name') === 'batch_action') {
+            if ($('.mapping-checkbox:checked').length === 0) {
+                alert("Vui lòng chọn ít nhất một mapping để thực hiện hành động.");
+                event.preventDefault(); // Ngăn form submit
+                return false;
+            }
+            // Form sẽ tự động submit đến action đã khai báo là url_for('mappings.batch_toggle_active')
+            // và gửi kèm giá trị của nút batch_action được nhấn.
+        }
+    });
 });
 </script>
 {% endblock %}

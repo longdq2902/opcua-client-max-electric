@@ -533,3 +533,63 @@ def db_only_toggle_active(mapping_id):
             flash(f"Lỗi khi cập nhật trạng thái DB của mapping: {str(e)}", "danger")
 
     return redirect(url_for('mappings.list_mappings'))
+
+#cập nhật trạng thái DB hàng loạt
+@mappings_bp.route('/batch_toggle_active', methods=['POST'])
+def batch_toggle_active():
+    logger = get_logger()
+    mapping_ids_str = request.form.getlist('mapping_ids') # Lấy danh sách các ID được check
+    action_type = request.form.get('batch_action') # 'activate_selected' hoặc 'deactivate_selected'
+
+    logger.info(f"Yêu cầu batch toggle active. Action: {action_type}, IDs: {mapping_ids_str}")
+
+    if not mapping_ids_str:
+        flash("Không có mapping nào được chọn để thực hiện hành động.", "warning")
+        return redirect(url_for('mappings.list_mappings'))
+
+    if action_type not in ['activate_selected', 'deactivate_selected']:
+        flash("Hành động hàng loạt không hợp lệ.", "danger")
+        return redirect(url_for('mappings.list_mappings'))
+
+    mapping_ids = []
+    for id_str in mapping_ids_str:
+        try:
+            mapping_ids.append(int(id_str))
+        except ValueError:
+            logger.warning(f"Batch toggle: Bỏ qua mapping_id không hợp lệ: {id_str}")
+            continue
+    
+    if not mapping_ids:
+        flash("Không có mapping ID hợp lệ nào được chọn.", "warning")
+        return redirect(url_for('mappings.list_mappings'))
+
+    new_active_state = (action_type == 'activate_selected')
+    action_text = "kích hoạt (DB)" if new_active_state else "vô hiệu hóa (DB)"
+
+    try:
+        mappings_to_update = SubscriptionMapping.query.filter(SubscriptionMapping.id.in_(mapping_ids)).all()
+        
+        updated_count = 0
+        if not mappings_to_update:
+            flash("Không tìm thấy mapping nào với các ID đã chọn trong CSDL.", "warning")
+            return redirect(url_for('mappings.list_mappings'))
+
+        for mapping in mappings_to_update:
+            if mapping.is_active != new_active_state:
+                mapping.is_active = new_active_state
+                db.session.add(mapping)
+                updated_count += 1
+        
+        if updated_count > 0:
+            db.session.commit()
+            flash(f"Đã {action_text} cho {updated_count} mapping đã chọn trong CSDL.", "success")
+            logger.info(f"Đã {action_text} cho {updated_count} mappings (DB only): {mapping_ids}")
+        else:
+            flash("Không có mapping nào được thay đổi trạng thái (có thể chúng đã ở trạng thái mong muốn).", "info")
+
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Lỗi khi thực hiện hành động hàng loạt '{action_type}': {e}", exc_info=True)
+        flash(f"Lỗi khi thực hiện hành động hàng loạt: {str(e)}", "danger")
+
+    return redirect(url_for('mappings.list_mappings'))
