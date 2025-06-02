@@ -20,7 +20,6 @@ from app.opcua_client import async_get_node_data_value # Import hàm mới
 
 
 
-
 # Hàm register_routes sẽ được gọi từ app/__init__.py
 def register_routes(app_instance):
     logger = app_instance.logger
@@ -586,3 +585,5 @@ def register_routes(app_instance):
         else:
             logger.warning(f"AJAX Refresh Value: Hàm async_get_node_data_value trả về None cho node '{opc_node_from_db.node_id_string}'.")
             return jsonify({"error": "Không thể lấy giá trị từ server OPC UA."}), 500
+        
+

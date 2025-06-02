@@ -290,10 +290,11 @@ def is_server_connected(server_id: int) -> bool:
 async def _browse_recursive(client: AsyncuaClient,
                             ua_node: AsyncuaNode,
                             server_db_id: int,
-                            processed_node_ids: set, # Set để theo dõi các node đã xử lý trong phiên này
-                            parent_node_db_id_str: str = None,
+                            processed_node_ids: set,
+                            parent_node_db_id_str: Optional[str] = None,
                             depth: int = 0,
-                            max_depth: int = 5):
+                            max_depth: int = 10,
+                            browse_types_deeply: bool = False):
     """
     Hàm đệ quy để duyệt các node.
     Yield một dictionary chứa thông tin của từng node tìm thấy.
@@ -302,7 +303,7 @@ async def _browse_recursive(client: AsyncuaClient,
         logger.info(f"Dừng duyệt (cờ): ServerID={server_db_id}, Node='{ua_node.nodeid.to_string() if ua_node and ua_node.nodeid else 'N/A'}'")
         return
 
-    if not ua_node or not ua_node.nodeid:
+    if not ua_node or not ua_node.nodeid: # Kiểm tra node hợp lệ
         logger.warning(f"Node không hợp lệ hoặc không có NodeId. ServerID={server_db_id}, Parent='{parent_node_db_id_str}', Depth={depth}")
         return
 
@@ -319,12 +320,13 @@ async def _browse_recursive(client: AsyncuaClient,
 
     try:
         # Đọc các thuộc tính cơ bản
+        browse_name_str = "UnknownBrowseName"
         try:
             browse_name_obj = await ua_node.read_browse_name()
             browse_name_str = f"{browse_name_obj.NamespaceIndex}:{browse_name_obj.Name}" if browse_name_obj.NamespaceIndex != 0 else browse_name_obj.Name
         except ua.UaStatusCodeError as e_bn:
-            logger.warning(f"Lỗi đọc BrowseName: ServerID={server_db_id}, Node='{node_id_str}', Code={e_bn.code}, Msg='{str(e_bn)}'. Bỏ qua node.")
-            return
+            logger.warning(f"Lỗi đọc BrowseName: ServerID={server_db_id}, Node='{node_id_str}', Code={e_bn.code}, Msg='{str(e_bn)}'. Bỏ qua node này có thể không đúng nếu NodeClass vẫn đọc được.")
+            # Không return ngay, cố gắng đọc các thuộc tính khác
 
         display_name_str = browse_name_str # Fallback
         try:
@@ -334,26 +336,27 @@ async def _browse_recursive(client: AsyncuaClient,
         except ua.UaStatusCodeError as e_dn:
             logger.debug(f"Lỗi đọc DisplayName: ServerID={server_db_id}, Node='{node_id_str}', Code={e_dn.code}, Msg='{str(e_dn)}'. Dùng BrowseName.")
 
+        node_class_obj = None # Khởi tạo
+        node_class_str = "UnknownNodeClass"
         try:
-            node_class_obj = await ua_node.read_node_class()
+            node_class_obj = await ua_node.read_node_class() # Đây là enum ua.NodeClass
             node_class_str = node_class_obj.name if node_class_obj else "UnknownNodeClass"
         except ua.UaStatusCodeError as e_nc:
-            logger.warning(f"Lỗi đọc NodeClass: ServerID={server_db_id}, Node='{node_id_str}', Code={e_nc.code}, Msg='{str(e_nc)}'. Bỏ qua node.")
-            return
+            logger.warning(f"Lỗi đọc NodeClass: ServerID={server_db_id}, Node='{node_id_str}', Code={e_nc.code}, Msg='{str(e_nc)}'. Gán là UnknownNodeClass.")
+            # Không return ngay, vẫn cố gắng yield thông tin node với NodeClass không xác định
 
         description_str = None
         try:
             description_obj = await ua_node.read_description()
             description_str = description_obj.Text if description_obj and description_obj.Text else None
-        except ua.UaStatusCodeError as e_desc:
+        except ua.UaStatusCodeError as e_desc: # Lỗi này thường gặp, không nên làm dừng hẳn
             logger.debug(f"Lỗi đọc Description: ServerID={server_db_id}, Node='{node_id_str}', Code={e_desc.code}, Msg='{str(e_desc)}'. Gán là None.")
 
         data_type_str = None
-        if node_class_obj == ua.NodeClass.Variable:
+        if node_class_obj == ua.NodeClass.Variable: # Chỉ đọc DataType nếu là Variable
             try:
                 datatype_nodeid = await ua_node.read_data_type()
                 if datatype_nodeid:
-                    # Cố gắng lấy tên dễ đọc của DataType, nếu không thì dùng NodeId của nó
                     try:
                         datatype_node = client.get_node(datatype_nodeid)
                         datatype_display_name_obj = await datatype_node.read_display_name()
@@ -369,7 +372,7 @@ async def _browse_recursive(client: AsyncuaClient,
             except Exception as e_dt_general:
                 logger.debug(f"Lỗi chung khi đọc DataType: ServerID={server_db_id}, VariableNode='{node_id_str}', Lỗi='{str(e_dt_general)}'. Gán là 'UnknownDataType'.")
                 data_type_str = "UnknownDataType"
-
+        
         node_info = {
             'server_id': server_db_id,
             'node_id_string': node_id_str,
@@ -380,11 +383,21 @@ async def _browse_recursive(client: AsyncuaClient,
             'data_type': data_type_str,
             'description': description_str,
         }
-        # logger.info(f"Đã xử lý Node: ServerID={server_db_id}, ID='{node_id_str}', Name='{display_name_str}', Class='{node_class_str}', Parent='{parent_node_db_id_str}', Depth={depth}")
+        logger.info(f"Đã xử lý Node: ServerID={server_db_id}, ID='{node_id_str}', Name='{display_name_str}', Class='{node_class_str}', Parent='{parent_node_db_id_str}', Depth={depth}")
         yield node_info
 
-        # Tiếp tục duyệt các node con
-        if node_class_obj in [ua.NodeClass.Object, ua.NodeClass.View] and depth < max_depth:
+        # Điều kiện để duyệt sâu hơn vào các node con
+        # Mở rộng để duyệt con của nhiều loại NodeClass hơn nếu browse_types_deeply là True
+        can_have_children = False
+        if node_class_obj: # Chỉ kiểm tra nếu đọc được NodeClass
+            if node_class_obj in [ua.NodeClass.Object, ua.NodeClass.View]:
+                can_have_children = True
+            elif browse_types_deeply and node_class_obj in [
+                    ua.NodeClass.ObjectType, ua.NodeClass.VariableType,
+                    ua.NodeClass.ReferenceType, ua.NodeClass.DataType]:
+                can_have_children = True
+        
+        if can_have_children and depth < max_depth:
             if browse_stop_flags.get(server_db_id, False):
                 logger.info(f"Dừng duyệt con của node '{node_id_str}' do tín hiệu dừng. ServerID={server_db_id}.")
                 return
@@ -399,64 +412,86 @@ async def _browse_recursive(client: AsyncuaClient,
                 logger.debug(f"Node '{node_id_str}' ({display_name_str}) có {len(children)} con. Duyệt con ở độ sâu {depth + 1}. ServerID={server_db_id}.")
                 for child_ua_node in children:
                     async for sub_node_info in _browse_recursive(client, child_ua_node, server_db_id,
-                                                                 processed_node_ids, # Truyền set
-                                                                 node_id_str, depth + 1, max_depth):
+                                                                 processed_node_ids,
+                                                                 node_id_str, depth + 1, max_depth,
+                                                                 browse_types_deeply):
                         yield sub_node_info
                     if browse_stop_flags.get(server_db_id, False):
                         logger.info(f"Dừng duyệt các con tiếp theo của node '{node_id_str}' do tín hiệu dừng. ServerID={server_db_id}.")
                         break
     except Exception as e_outer:
-        current_node_id_for_log = node_id_str if node_id_str else (ua_node.nodeid.to_string() if ua_node and ua_node.nodeid else 'UnknownNode (outer exception)')
+        current_node_id_for_log = node_id_str if node_id_str else (ua_node.nodeid.to_string() if ua_node and ua_node.nodeid else 'N/A (outer exception)')
         logger.error(f"Lỗi nghiêm trọng khi xử lý node '{current_node_id_for_log}': {str(e_outer)}. ServerID={server_db_id}.", exc_info=True)
 
-
-async def start_server_browse(server_db_id: int, start_node_id_str: str = None, max_depth: int = 5):
+async def start_server_browse(server_db_id: int, 
+                              start_node_id_str: Optional[str] = None, 
+                              max_depth: int = 5, 
+                              browse_types_deeply: bool = False):
     """
     Bắt đầu quá trình duyệt Address Space của server.
+    Mặc định bắt đầu từ RootFolder (i=84) nếu start_node_id_str không được cung cấp,
+    để bao gồm Objects, Types, và Views.
     Yields node_info dictionaries.
     """
-    client = get_client_by_server_id(server_db_id) # Hàm này đã được định nghĩa
+    client = get_client_by_server_id(server_db_id)
     if not client:
         logger.error(f"Không tìm thấy client kết nối cho server ID: {server_db_id}. Không thể duyệt node.")
-        return # Hoặc raise Exception
+        return
 
-    logger.info(f"Bắt đầu duyệt server ID: {server_db_id}. Độ sâu tối đa: {max_depth}. Đặt cờ dừng về False.")
-    browse_stop_flags[server_db_id] = False # Reset/Khởi tạo cờ dừng cho phiên duyệt này
-    
-    processed_node_ids_this_session = set() # Set để theo dõi node đã xử lý trong phiên này
+    logger.info(f"Bắt đầu duyệt server ID: {server_db_id}. MaxDepth={max_depth}, BrowseTypesDeeply={browse_types_deeply}. Đặt cờ dừng về False.")
+    browse_stop_flags[server_db_id] = False
+    processed_node_ids_this_session = set() # Set mới cho mỗi phiên duyệt
 
     try:
-        start_ua_node = None
+        start_ua_node_to_browse: Optional[AsyncuaNode] = None # Khai báo với type hint
+        parent_for_this_start_node: Optional[str] = None
+
         if start_node_id_str:
             try:
-                start_ua_node = client.get_node(start_node_id_str)
+                start_ua_node_to_browse = client.get_node(start_node_id_str)
                 logger.info(f"Bắt đầu duyệt từ node được chỉ định: '{start_node_id_str}'. ServerID={server_db_id}.")
+                
+                # Xác định parent cho node bắt đầu nếu nó là một trong các thư mục chuẩn
+                standard_root_children_nodeids = [
+                    ua.NodeId(ua.ObjectIds.ObjectsFolder),
+                    ua.NodeId(ua.ObjectIds.TypesFolder),
+                    ua.NodeId(ua.ObjectIds.ViewsFolder)
+                ]
+                if start_ua_node_to_browse.nodeid in standard_root_children_nodeids:
+                     parent_for_this_start_node = ua.NodeId(ua.ObjectIds.RootFolder).to_string()
+                # Nếu không, parent_for_this_start_node sẽ là None (nghĩa là node này là gốc của cây duyệt)
+
             except Exception as e_get_start_node:
                 logger.error(f"Không thể lấy node bắt đầu '{start_node_id_str}': {e_get_start_node}. ServerID={server_db_id}.", exc_info=True)
                 return
         else:
+            # Mặc định duyệt từ RootFolder (i=84)
             try:
-                start_ua_node = client.get_node(ua.ObjectIds.ObjectsFolder)
-                logger.info(f"Bắt đầu duyệt từ node gốc ObjectsFolder (NodeId: '{start_ua_node.nodeid.to_string()}'). ServerID={server_db_id}.")
-            except Exception as e_get_objects:
-                logger.error(f"Không thể lấy node ObjectsFolder: {e_get_objects}. ServerID={server_db_id}.", exc_info=True)
-                return
-        
-        if not start_ua_node: # Nếu vẫn không lấy được start_ua_node
+                start_ua_node_to_browse = client.get_node(ua.ObjectIds.RootFolder)
+                parent_for_this_start_node = None # RootFolder không có parent trong ngữ cảnh này
+                logger.info(f"Bắt đầu duyệt từ node gốc RootFolder (NodeId: '{start_ua_node_to_browse.nodeid.to_string()}'). ServerID={server_db_id}.")
+            except Exception as e_get_root:
+                logger.error(f"Không thể lấy node RootFolder: {e_get_root}. ServerID={server_db_id}. Thử fallback về ObjectsFolder.", exc_info=True)
+                try:
+                    start_ua_node_to_browse = client.get_node(ua.ObjectIds.ObjectsFolder)
+                    parent_for_this_start_node = ua.NodeId(ua.ObjectIds.RootFolder).to_string()
+                    logger.info(f"Fallback: Bắt đầu duyệt từ ObjectsFolder (NodeId: '{start_ua_node_to_browse.nodeid.to_string()}'). ServerID={server_db_id}.")
+                except Exception as e_get_objects:
+                    logger.error(f"Không thể lấy cả RootFolder và ObjectsFolder: {e_get_objects}. ServerID={server_db_id}.", exc_info=True)
+                    return
+
+        if not start_ua_node_to_browse:
             logger.error(f"Không thể xác định node bắt đầu duyệt. ServerID={server_db_id}.")
             return
 
-        parent_for_start_node = None
-        if start_ua_node.nodeid == ua.ObjectIds.ObjectsFolder:
-            parent_for_start_node = ua.ObjectIds.RootFolder.to_string() # Cha của ObjectsFolder là RootFolder
-
-        # Bắt đầu duyệt đệ quy
-        async for node_data in _browse_recursive(client, start_ua_node, server_db_id, 
-                                                 processed_node_ids_this_session, # Truyền set vào
-                                                 parent_for_start_node, 0, max_depth):
+        # Bắt đầu duyệt đệ quy từ start_ua_node_to_browse
+        async for node_data in _browse_recursive(client, start_ua_node_to_browse, server_db_id,
+                                                 processed_node_ids_this_session,
+                                                 parent_for_this_start_node, 0, max_depth,
+                                                 browse_types_deeply):
             yield node_data
         
-        # Kiểm tra cờ dừng sau khi generator hoàn tất (hoặc bị dừng sớm)
+        # Log sau khi vòng lặp kết thúc (dù là hoàn thành hay bị dừng)
         if browse_stop_flags.get(server_db_id, False):
             logger.info(f"Quá trình duyệt cho server ID {server_db_id} đã bị dừng bởi cờ.")
         else:
@@ -466,8 +501,8 @@ async def start_server_browse(server_db_id: int, start_node_id_str: str = None, 
         logger.error(f"Lỗi OPC UA trong quá trình duyệt server ID {server_db_id}: {str(e_ua)}", exc_info=True)
     except Exception as e_general:
         logger.error(f"Lỗi không mong muốn trong quá trình duyệt server ID {server_db_id}: {str(e_general)}", exc_info=True)
-    # Việc dọn dẹp browse_stop_flags[server_db_id] sẽ do route handler thực hiện sau khi asyncio.run() kết thúc
-    # để đảm bảo cờ được xóa ngay cả khi generator này có lỗi và không chạy hết.
+    # finally: # Route handler sẽ chịu trách nhiệm dọn dẹp browse_stop_flags
+    #    pass
 
 # kết thúc phần duyệt node
 
@@ -782,7 +817,7 @@ class SubHandler:
         self.api_url = "http://localhost:5001/api/v1/datapoint-value" # API cố định
         self.worker_loop = get_async_worker().loop # Lấy event loop từ AsyncWorker
 
-    async def datachange_notification(self, node: AsyncuaNode, val, data):
+    async def datachange_notification1(self, node: AsyncuaNode, val, data):
         """
         Được gọi bởi asyncua khi có thay đổi dữ liệu.
         'node': đối tượng asyncua.common.node.Node của item được monitor.
@@ -846,6 +881,25 @@ class SubHandler:
                 f"SubHandler (MappingID: {self.mapping_id}, Node: {self.node_id_str}): "
                 f"Lỗi không xác định khi gọi API: {e}", exc_info=True
             )
+
+    async def datachange_notification(self, node: AsyncuaNode, val, data):
+        """
+        Được gọi bởi asyncua khi có thay đổi dữ liệu.
+        'node': đối tượng asyncua.common.node.Node của item được monitor.
+        'val': giá trị mới của node.
+        'data': đối tượng DataChangeNotification.
+        """
+        source_timestamp = data.monitored_item.Value.SourceTimestamp
+        server_timestamp = data.monitored_item.Value.ServerTimestamp
+        status_code = data.monitored_item.Value.StatusCode
+
+        logger.info(
+            f"SubHandler (MappingID: {self.mapping_id}, Node: {self.node_id_str}): "
+            f"DataChange! Value={val}, StatusCode={status_code.name if status_code else 'N/A'}, "
+            f"SourceTs={source_timestamp}, ServerTs={server_timestamp}"
+        )
+
+        
 
     def event_notification(self, event):
         """Được gọi bởi asyncua khi có thông báo event (ít dùng cho data change đơn giản)."""
