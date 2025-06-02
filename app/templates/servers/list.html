@@ -84,7 +84,7 @@
                     <div class="btn-group-sm" role="group" aria-label="Server Node Actions">
                         <form action="{{ url_for('trigger_browse_and_save_nodes', server_id=server_item.id) }}" method="POST" style="display: inline;">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="max_depth" value="3"> {# Hoặc thêm input cho người dùng chọn #}
+                            <input type="hidden" name="max_depth" value="5"> {# Hoặc thêm input cho người dùng chọn #}
                             <button type="submit" class="btn btn-info btn-sm" title="Duyệt và lưu nodes (độ sâu 3)"
                                     {% if not (display_state and display_state.is_live) %}disabled{% endif %}>
                                 <i class="fas fa-sitemap"></i> Duyệt
