@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{# Import render_form từ bootstrap5/form.html #}
+{% from "bootstrap5/form.html" import render_form %}
+
+{% block title %}Quản lý Điểm Dữ liệu (IOA) cho Trạm {{ station.name }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1 class="mt-4">Quản lý IOA cho Trạm: {{ station.name }} (CA: {{ station.common_address }})</h1>
+    <p><a href="{{ url_for('iec104_bp.station_config_overview') }}">&laquo; Quay lại Danh sách Trạm</a></p>
+    <hr>
+
+    {# Hiển thị flash messages nếu có #}
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+                <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                    {{ message }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+    <h3>{{ "Chỉnh sửa IOA" if point_form and point_to_edit else "Thêm IOA Mới" }}</h3>
+    {# Đảm bảo action URL đúng nếu point_id là None cho trường hợp thêm mới #}
+    <form method="POST" action="{{ url_for('iec104_bp.manage_points', station_id=station.id, point_id=(point_to_edit.id if point_to_edit else None)) }}" novalidate>
+        {{ point_form.hidden_tag() }}
+        {# Sử dụng render_form đã import để render toàn bộ form #}
+        {{ render_form(point_form) }}
+    </form>
+
+    <hr>
+    <h3>Danh sách IOA Hiện có</h3>
+    {% if points %}
+    <table class="table table-striped">
+        <thead>
+            <tr>
+                <th>IOA</th>
+                <th>Loại (TypeID)</th>
+                <th>Mô tả</th>
+                <th>Chu kỳ (ms)</th>
+                <th>Hành động</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for point in points %}
+            <tr>
+                <td>{{ point.io_address }}</td>
+                <td>{{ point.point_type_str.value }}</td>
+                <td>{{ point.description }}</td>
+                <td>{{ point.report_ms }}</td>
+                <td>
+                    <a href="{{ url_for('iec104_bp.manage_points', station_id=station.id, point_id=point.id) }}" class="btn btn-sm btn-primary">Sửa</a>
+                    <form method="POST" action="{{ url_for('iec104_bp.delete_point', station_id=station.id, point_id=point.id) }}" style="display:inline;" onsubmit="return confirm('Bạn có chắc chắn muốn xóa IOA này không?');">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                        <button type="submit" class="btn btn-sm btn-danger">Xóa</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p>Chưa có IOA nào được cấu hình cho trạm này.</p>
+    {% endif %}
+</div>
+{% endblock %}

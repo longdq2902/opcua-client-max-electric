@@ -1,6 +1,9 @@
 # app/models.py
 from app import db # Import đối tượng db từ package app
 from datetime import datetime
+import enum # Sẽ dùng cho PointType sau này
+from . import db
+
 
 class OpcServer(db.Model):
     __tablename__ = 'opc_servers'
@@ -145,3 +148,59 @@ class SubscriptionMapping(db.Model):
 
     def __repr__(self):
         return f'<SubscriptionMapping ID:{self.id} SrvID:{self.server_id} NodeDBID:{self.opc_node_db_id} IOA:{self.ioa_mapping} Active:{self.is_active}>'
+    
+
+class IEC104PointType(enum.Enum):
+    # Các loại thông dụng, bạn có thể bổ sung thêm từ c104.Type
+    M_SP_NA_1 = "M_SP_NA_1" # Single-point information
+    M_DP_NA_1 = "M_DP_NA_1" # Double-point information
+    M_ME_NA_1 = "M_ME_NA_1" # Measured value, normalized value
+    M_ME_NB_1 = "M_ME_NB_1" # Measured value, scaled value
+    M_ME_NC_1 = "M_ME_NC_1" # Measured value, short floating point
+    # Thêm các loại khác nếu cần...
+
+    def __str__(self):
+        return self.name
+
+class IEC104Station(db.Model):
+    __tablename__ = 'iec104_stations'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False, default="IEC104 Station")
+    ip_address = db.Column(db.String(50), nullable=False, default="0.0.0.0")
+    port = db.Column(db.Integer, nullable=False, default=2404)
+    common_address = db.Column(db.Integer, nullable=False, default=1, unique=True) # Giả sử mỗi CA là duy nhất
+
+    # Tham số protocol cơ bản của IEC 104 (lấy từ c104.CS104_APCIParameters)
+    # Giá trị mặc định có thể tham khảo từ tài liệu c104 hoặc để trống và cấu hình sau
+    t0_timeout = db.Column(db.Integer, default=30)  # Connection timeout
+    t1_timeout = db.Column(db.Integer, default=15)  # Response timeout for TESTFR_ACT messages
+    t2_timeout = db.Column(db.Integer, default=10)  # Acknowledge timeout for I-format SDUs with no data
+    t3_timeout = db.Column(db.Integer, default=20)  # Timeout for sending TESTFR_ACT messages in long idle states
+
+    k_value = db.Column(db.Integer, default=12)     # Max difference receive state variable and send state variable
+    w_value = db.Column(db.Integer, default=8)      # Latest acknowledged I-format SDU
+
+    # Quan hệ với các Points
+    points = db.relationship('IEC104Point', backref='station', lazy='dynamic', cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f'<IEC104Station {self.name} (CA: {self.common_address})>'
+
+class IEC104Point(db.Model):
+    __tablename__ = 'iec104_points'
+    id = db.Column(db.Integer, primary_key=True)
+    station_id = db.Column(db.Integer, db.ForeignKey('iec104_stations.id'), nullable=False)
+    io_address = db.Column(db.Integer, nullable=False) # Địa chỉ IOA
+    description = db.Column(db.String(200))
+
+    # Sử dụng Enum để lưu loại Point Type
+    point_type_str = db.Column(db.Enum(IEC104PointType), nullable=False, default=IEC104PointType.M_SP_NA_1)
+
+    # report_ms cho cyclic reporting (0 nếu không dùng cyclic hoặc chỉ spontaneous)
+    report_ms = db.Column(db.Integer, default=0)
+
+    # Đảm bảo tính duy nhất của io_address cho mỗi station
+    __table_args__ = (db.UniqueConstraint('station_id', 'io_address', name='_station_ioa_uc'),)
+
+    def __repr__(self):
+        return f'<IEC104Point IOA: {self.io_address} Type: {self.point_type_str}>'

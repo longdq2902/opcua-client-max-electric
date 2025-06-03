@@ -10,10 +10,14 @@ from .config import Config
 import os
 
 
+
+
+
 db = SQLAlchemy()
 bootstrap = Bootstrap5()
 csrf = CSRFProtect() # <-- Khởi tạo đối tượng CSRFProtect
 migrate = Migrate() # Khởi tạo đối tượng Migrate
+
 
 
 
@@ -26,6 +30,12 @@ def create_app(config_class=Config):
     db.init_app(app)
     migrate.init_app(app, db) # Gắn Migrate vào app và db
     bootstrap.init_app(app)
+
+    # Khởi tạo IEC104Manager với app context
+    # Cách tốt hơn là truy cập thông qua app.extensions hoặc một cơ chế quản lý global khác
+    global iec104_manager
+    from .iec104_manager import IEC104Manager # Import bên trong create_app
+    iec104_manager = IEC104Manager(app)
 
     csrf.init_app(app) # <-- Kích hoạt CSRF protection cho app
 
@@ -48,5 +58,8 @@ def create_app(config_class=Config):
 
     from .mappings_routes import mappings_bp # THÊM IMPORT
     app.register_blueprint(mappings_bp) # ĐĂNG KÝ BLUEPRINT
+
+    from .iec104_routes import iec104_bp
+    app.register_blueprint(iec104_bp, url_prefix='/iec104')
 
     return app

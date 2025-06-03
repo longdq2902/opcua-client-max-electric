@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{# Import render_form từ bootstrap5/form.html #}
+{% from "bootstrap5/form.html" import render_form %}
+
+{% block title %}Cấu hình Trạm IEC 104{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1 class="mt-4">Cấu hình Trạm IEC 104</h1>
+    <hr>
+
+    {# Hiển thị flash messages nếu có #}
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+                <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                    {{ message }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+    {% if station_form %}
+        <h3>{{ "Chỉnh sửa Trạm" if station else "Thêm Trạm Mới" }}</h3>
+        {# Đảm bảo action URL đúng nếu station_id là None cho trường hợp thêm mới #}
+        <form method="POST" action="{{ url_for('iec104_bp.configure_station', station_id=(station.id if station else None)) }}" novalidate>
+            {{ station_form.hidden_tag() }}
+            {# Sử dụng render_form đã import để render toàn bộ form #}
+            {{ render_form(station_form) }}
+        </form>
+    {% elif not stations and not station_form %} {# Thêm điều kiện not station_form để không hiển thị khi đang ở form thêm mới #}
+         <p>Chưa có trạm IEC 104 nào được cấu hình. <a href="{{ url_for('iec104_bp.configure_station') }}">Thêm trạm mới?</a></p>
+    {% endif %}
+
+    <hr>
+    <h2>Danh sách Trạm IEC 104 Hiện có</h2>
+    {% if stations %}
+    <table class="table table-striped">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Tên Trạm</th>
+                <th>IP</th>
+                <th>Port</th>
+                <th>CA</th>
+                <th>Hành động</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for s in stations %}
+            <tr>
+                <td>{{ s.id }}</td>
+                <td>{{ s.name }}</td>
+                <td>{{ s.ip_address }}</td>
+                <td>{{ s.port }}</td>
+                <td>{{ s.common_address }}</td>
+                <td>
+                    <a href="{{ url_for('iec104_bp.configure_station', station_id=s.id) }}" class="btn btn-sm btn-primary">Sửa</a>
+                    <a href="{{ url_for('iec104_bp.manage_points', station_id=s.id) }}" class="btn btn-sm btn-info">Quản lý IOA</a>
+                    {# Cân nhắc thêm nút xóa trạm ở đây nếu cần, kèm xác nhận #}
+                    {#
+                    <form method="POST" action="{{ url_for('iec104_bp.delete_station', station_id=s.id) }}" style="display:inline;" onsubmit="return confirm('Bạn có chắc chắn muốn xóa trạm này và tất cả IOA của nó không?');">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                        <button type="submit" class="btn btn-sm btn-danger">Xóa</button>
+                    </form>
+                    #}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+        {# Chỉ hiển thị nếu không có stations VÀ không đang trong form thêm mới #}
+        {% if not station_form %}
+            <p>Chưa có trạm nào. <a href="{{ url_for('iec104_bp.configure_station') }}">Thêm trạm mới?</a></p>
+        {% endif %}
+    {% endif %}
+
+
+    <hr>
+    <h2>Trạng thái Server IEC 104</h2>
+    {% if server_status %}
+        <p><strong>Trạng thái:</strong> 
+            <span class="badge bg-{{ 'success' if server_status.running else ('warning' if server_status.station_name == 'N/A' and not server_status.running else 'danger') }}">
+                {{ 'Đang chạy' if server_status.running else ('Sẵn sàng khởi động' if server_status.station_name == 'N/A' and not server_status.running and stations else 'Đã dừng') }}
+            </span>
+        </p>
+        {% if server_status.running %}
+            <p><strong>Tên trạm đang chạy:</strong> {{ server_status.station_name }} (CA: {{ server_status.common_address }})</p>
+            <p><strong>Lắng nghe trên:</strong> {{ server_status.ip_address }}:{{ server_status.port }}</p>
+            <p><strong>Số lượng IOA được load:</strong> {{ server_status.points_count }}</p>
+            <form method="POST" action="{{ url_for('iec104_bp.stop_iec_server') }}" style="display: inline;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                <button type="submit" class="btn btn-danger">Dừng Server</button>
+            </form>
+        {% elif stations %} {# Chỉ hiển thị form khởi động nếu có trạm để chọn #}
+            <form method="POST" action="{{ url_for('iec104_bp.start_iec_server') }}" style="display: inline;">
+                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                <div class="row g-3 align-items-center">
+                    <div class="col-auto">
+                        <label for="station_to_start" class="col-form-label">Chọn trạm để khởi động:</label>
+                    </div>
+                    <div class="col-auto">
+                        <select name="station_id_to_start" id="station_to_start" class="form-select">
+                            {% for s_opt in stations %} {# Đổi tên biến để tránh xung đột với s trong vòng lặp ở trên #}
+                                <option value="{{ s_opt.id }}">{{ s_opt.name }} (CA: {{ s_opt.common_address }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-auto">
+                        <button type="submit" class="btn btn-success">Bắt đầu Server</button>
+                    </div>
+                </div>
+            </form>
+        {% elif not station_form %} {# Nếu không có trạm nào và không ở form thêm trạm #}
+             <p>Không có trạm nào được cấu hình để khởi động server.</p>
+        {% endif %}
+    {% else %}
+        <p>Không thể lấy trạng thái server. Manager có thể chưa được khởi tạo.</p>
+    {% endif %}
+</div>
+{% endblock %}

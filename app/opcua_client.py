@@ -10,6 +10,7 @@ from async_worker import get_async_worker
 from app import db 
 import requests
 import json
+from app import iec104_manager
 
 
 
@@ -895,8 +896,21 @@ class SubHandler:
 
         logger.info(
             f"SubHandler (MappingID: {self.mapping_id}, Node: {self.node_id_str}): "
-            f"DataChange! Value={val}, StatusCode={status_code.name if status_code else 'N/A'}, "
+            f"DataChange! Value={val}, StatusCode={status_code.name if status_code else 'N/A'}, io_address={self.ioa_mapping}, "
             f"SourceTs={source_timestamp}, ServerTs={server_timestamp}"
+        )
+
+        
+        quality_flags_good = {'iv': False, 'nt': False, 'sb': False, 'bl': False, 'ov': False} # Chất lượng "good"
+        import time
+        current_timestamp_ms = int(time.time() * 1000)
+
+        iec104_manager.update_ioa_value(
+            common_address=10,
+            io_address=self.ioa_mapping,
+            value=val,
+            quality_flags=quality_flags_good,
+            timestamp_ms=current_timestamp_ms
         )
 
         
